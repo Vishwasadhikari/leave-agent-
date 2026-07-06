@@ -7,71 +7,36 @@ def main():
     print("Leave Management Multi-Agent System")
     print("=" * 60)
 
-    print("\nExecution Mode")
-
-    print("1. Sequential")
-
-    print("2. Parallel")
-
-    choice = input("\nEnter choice (1/2): ").strip()
-
-    if choice == "2":
-
-        execution_mode = "parallel"
-
-    else:
-
-        execution_mode = "sequential"
-
-    print("\nEnter Leave Details\n")
-
-    employee_id = input("Employee ID : ")
-
-    manager_id = input("Manager ID : ")
-
-    leave_type = input("Leave Type (annual/casual/sick): ")
-
-    start_date = input("Start Date (YYYY-MM-DD): ")
-
-    end_date = input("End Date (YYYY-MM-DD): ")
-
-    reason = input("Reason : ")
-
-    request = {
-
-        "employee_id": employee_id,
-
-        "manager_id": manager_id,
-
-        "leave_type": leave_type,
-
-        "start_date": start_date,
-
-        "end_date": end_date,
-
-        "reason": reason
-
-    }
-
     orchestrator = LeaveOrchestrator()
 
-    result = orchestrator.run(
+    print("\nType 'exit' to quit.\n")
 
-        request=request,
+    while True:
 
-        execution_mode=execution_mode
+        query = input("You : ").strip()
 
-    )
+        if query.lower() == "exit":
 
-    print("\n")
+            print("\nGoodbye!")
 
-    print("=" * 60)
+            break
 
-    print("Execution Completed")
+        print("\nAssistant:\n")
 
-    print("=" * 60)
+        try:
 
-    print(result)
+            response = orchestrator.run(query)
+
+            print(response)
+
+        except Exception as e:
+
+            print(f"\nError: {e}")
+
+            import traceback
+            traceback.print_exc()
+
+        print("\n" + "-" * 60 + "\n")
 
 
 if __name__ == "__main__":

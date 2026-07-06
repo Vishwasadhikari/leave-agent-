@@ -23,6 +23,47 @@ def get_employee(employee_id: str):
     }
     
 @tool
+def get_employee_by_name(employee_name: str):
+    """
+    Get employee details using employee name.
+    """
+
+    employee = db.get_employee_by_name(employee_name)
+
+    if employee is None:
+
+        return {
+            "success": False,
+            "message": "Employee not found."
+        }
+
+    return {
+        "success": True,
+        "employee": employee
+    }
+    
+    
+@tool
+def get_manager_by_name(manager_name: str):
+    """
+    Get manager details using manager name.
+    """
+
+    manager = db.get_manager_by_name(manager_name)
+
+    if manager is None:
+
+        return {
+            "success": False,
+            "message": "Manager not found."
+        }
+
+    return {
+        "success": True,
+        "manager": manager
+    }
+    
+@tool
 def validate_employee(employee_id: str):
     """
     Check whether an employee exists.

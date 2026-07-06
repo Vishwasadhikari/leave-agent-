@@ -38,6 +38,24 @@ class DynamoDBService:
         )
 
         return response.get("Item")
+    def get_employee_by_name(self, employee_name):
+        response = self.employee_table.scan()
+        print(response["Items"])
+        for employee in response["Items"]:
+            if employee["name"].strip().lower() == employee_name.strip().lower():
+                return employee
+        return None
+        
+    def get_manager_by_name(self, manager_name):
+        response = self.employee_table.scan()
+        for employee in response["Items"]:
+            if (
+            employee["name"].lower() == manager_name.lower()
+            and employee.get("role") == "Manager"
+        ):
+                return employee
+        return None
+        
     
     def employee_exists(self, employee_id):
 

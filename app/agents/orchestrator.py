@@ -58,8 +58,7 @@ class LeaveOrchestrator:
             "calendar_days": None,
             "awaiting_confirmation": False,
             "pending_submission": None,
-            "recent_submissions":[],
-                                      # Track recent submissions for duplicate check
+            "recent_submissions": [],
         }
 
     def add_history(self, role, message):
@@ -277,17 +276,35 @@ If you have any leave-related questions, I'd be happy to help."""
     def get_current_field(self):
         return self.context["current_field"]
 
-    def has_pending_submission_for_date(self, employee_id, start_date):
+    def has_pending_submission_for_date(self, employee_id, start_date, end_date):
         """
         Check if employee has pending submission for same date.
         FIX #4: Detect duplicate submissions
         """
-        for submission in self.context.get("recent_submissions", []):
-            if submission["employee_id"] == employee_id and submission["start_date"] == start_date:
-                # Check if submission is recent (within last hour for testing)
-                time_diff = datetime.now() - submission["timestamp"]
-                if time_diff.total_seconds() < 3600:  # 1 hour
-                    return True
+        for submission in self.context["recent_submissions"]:
+            existing_start = datetime.strptime(
+                submission["start_date"], "%Y-%m-%d"
+            ).date()
+
+            existing_end = datetime.strptime(
+                submission["end_date"], "%Y-%m-%d"
+            ).date()
+
+            new_start = datetime.strptime(
+                start_date, "%Y-%m-%d"
+            ).date()
+
+            new_end = datetime.strptime(
+                end_date, "%Y-%m-%d"
+            ).date()
+
+            if (
+                submission["employee_id"] == employee_id
+                and new_start <= existing_end
+                and existing_start <= new_end
+            ):
+                return True
+        
         return False
 
     def get_next_missing_field(self):
@@ -356,19 +373,7 @@ If you have any leave-related questions, I'd be happy to help."""
         - Leading/trailing whitespace
         """
         text = str(response)
-        text = re.sub(
-            r".*?</thinking>",
-            "",
-            text,
-            flags=re.DOTALL
-            )
-        text = re.sub(
-            r"<thinking>.*",
-            "",
-            text,
-            flags=re.DOTALL
-)
-
+        
         # FIRST: Remove all <thinking>...</thinking> blocks (including nested)
         while "<thinking>" in text:
             start = text.find("<thinking>")
@@ -423,7 +428,7 @@ If you have any leave-related questions, I'd be happy to help."""
             "",
             text,
             flags=re.MULTILINE | re.IGNORECASE
-            )
+        )
         
         # Remove markdown code fences
         text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
@@ -615,8 +620,6 @@ Rules:
             holidays:
             status:
             """
-        
-        
         
         elif agent_name == "policy":
             return f"""
@@ -815,19 +818,25 @@ status: found
         results = {}
 
         # FIX #4: Check for duplicate submission
-        if self.has_pending_submission_for_date(request["employee_id"], request["start_date"]):
-            return f"You already have a pending leave request for {request['start_date']}. Please wait for approval or contact your manager."
+        if self.has_pending_submission_for_date(
+            request["employee_id"],
+            request["start_date"],
+            request["end_date"]
+        ):
+            return (
+                f"You already have a pending leave request for "
+                f"{request['start_date']}. Please wait for approval or contact your manager."
+            )
 
         # Step 1: Employee Agent
         employee_prompt = self.build_agent_prompt("employee", request)
         with redirect_stdout(io.StringIO()):
             employee_result = self.employee_agent(employee_prompt)
             employee_result = self.clean_response(employee_result)
-        employee_parsed = self.parse_structured_response(employee_result)
-        results["employee"] = employee_parsed
+            employee_parsed = self.parse_structured_response(employee_result)
+            results["employee"] = employee_parsed
+            is_complete, missing = self.is_response_complete("employee", employee_parsed)
         
-        # VALIDATE EMPLOYEE RESPONSE
-        is_complete, missing = self.is_response_complete("employee", employee_parsed)
         if not is_complete:
             return f"We encountered an issue validating your information. Please try again. (Missing: {', '.join(missing)})"
         
@@ -835,14 +844,15 @@ status: found
             self.context["manager_id"] = employee_parsed["manager_id"]
         if not self.context["manager_name"] and "manager_name" in employee_parsed:
             self.context["manager_name"] = employee_parsed["manager_name"]
-            # Step 2: Holiday Agent
+
+        # Step 2: Holiday Agent
         holiday_prompt = self.build_agent_prompt("holiday", request)
         holiday_raw = self.clean_response(
             self._execute_agent_silent(self.holiday_agent, holiday_prompt)
         )
         holiday_result = self.parse_structured_response(holiday_raw)
 
-        # Step 2: Leave Agent
+        # Step 3: Leave Agent
         leave_prompt = self.build_agent_prompt("leave", request)
         leave_raw = self.clean_response(
             self._execute_agent_silent(self.leave_agent, leave_prompt)
@@ -852,59 +862,31 @@ status: found
         if "status" not in leave_result:
             leave_result["status"] = "success"
 
-        # Step 2: Holiday & Leave Agents (parallel)
-        # ##holiday_prompt = self.build_agent_prompt("holiday", request)
-        # holiday_raw = self.clean_response(
-        #     self._execute_agent_silent(self.holiday_agent, holiday_prompt)
-        # )
-        # holiday_result = self.parse_structured_response(holiday_raw)
-        # leave_prompt = self.build_agent_prompt("leave", request)
-        # leave_raw = self.clean_response(
-        #     self._execute_agent_silent(self.leave_agent, leave_prompt)
-        # )
-        # leave_result = self.parse_structured_response(leave_raw)
-
-        # if "status" not in leave_result:
-        #         leave_result["status"] = "success"
-
         # CRITICAL: VALIDATE LEAVE RESPONSE
         is_leave_complete, leave_missing = self.is_response_complete("leave", leave_result)
         if not is_leave_complete:
             return f"We encountered an issue calculating your leave details. Please try again. (Missing: {', '.join(leave_missing)})"
 
-        
-        for leave in self.context["recent_submissions"]:
-            if (
-        leave["employee_id"] == request["employee_id"]
-        and leave["start_date"] == request["start_date"]
-        and leave["end_date"] == request["end_date"]
-    ):
-                return (
-            "You have already submitted a leave request "
-            "for these dates during this session."
-        )
         results["holiday"] = holiday_result
         results["leave"] = leave_result
-        ##for submission in self.context["recent_submissions"]:
-           ## if (
-                ##submission["employee_id"] == request["employee_id"]
-               ## and submission["start_date"] == request["start_date"]
-                ##and submission["end_date"] == request["end_date"]
-                ##):
-               ## return (
-           ## f"You have already submitted a leave request for "
-           ## f"{request['start_date']} during this session." )
         
         if "working_days" in holiday_result:
             self.context["working_days"] = holiday_result["working_days"]
         if "calendar_days" in holiday_result:
             self.context["calendar_days"] = holiday_result["calendar_days"]
- 
-                    
-  
 
-        # Step 3: Policy Agent
+        # Step 4: Policy Agent
         policy_prompt = self.build_agent_prompt("policy", request)
+        policy_raw = self.clean_response(
+            self._execute_agent_silent(self.policy_agent, policy_prompt)
+            )
+        print("\n===== RAW POLICY RESPONSE =====")
+        print(policy_raw)
+        print("===============================\n")
+        policy_result = self.parse_structured_response(policy_raw)
+        print("\n===== PARSED POLICY RESPONSE =====")
+        print(policy_result)
+        print("==================================\n")
         with redirect_stdout(io.StringIO()):
             policy_result = self.policy_agent(policy_prompt)
             policy_result = self.clean_response(policy_result)
@@ -916,7 +898,7 @@ status: found
         if not is_policy_complete:
             return f"We encountered an issue validating your request against company policy. Please try again. (Missing: {', '.join(policy_missing)})"
 
-        # Step 4: Store pending submission and await confirmation
+        # Step 5: Store pending submission and await confirmation
         self.context["pending_submission"] = request
         self.context["awaiting_confirmation"] = True
 
@@ -999,9 +981,6 @@ Reply YES to submit, NO to cancel."""
             submission_status = submission_parsed.get("status", "").lower().strip()
             message = submission_parsed.get("message", "").lower().strip()
 
-            self.context["awaiting_confirmation"] = False
-            self.context["pending_submission"] = None
-
             is_success = (
                 submission_status in ["submitted", "success"] or
                 "submitted successfully" in message or
@@ -1009,7 +988,6 @@ Reply YES to submit, NO to cancel."""
             )
 
             if is_success:
-               
                 request_id = submission_parsed.get("request_id", "N/A")
                 response = f"""Your leave request has been submitted successfully.
 
@@ -1021,6 +999,8 @@ You'll be notified once your manager approves or rejects your request."""
                 
                 # FIX: Reset context ONLY after successful submission
                 self.reset_context()
+                self.context["awaiting_confirmation"] = False
+                self.context["pending_submission"] = None
             else:
                 error_message = submission_parsed.get("error", submission_parsed.get("message", "Submission failed"))
                 response = f"""We encountered an issue while submitting your leave request:
@@ -1107,27 +1087,27 @@ Please try again or contact your HR team for assistance."""
         # Handle general questions (no workflow)
         if not routing.get("workflow", False):
             # Check if employee_id is needed
-           intent = routing.get("intent", "")
-           needs_employee_id = intent in ["employee", "leave", "policy"]
-           query_lower = request.lower()
-           lookup_by_name = (
-               "my name is" in query_lower
-               or "employee id by name" in query_lower
-               or "find my employee id" in query_lower
-               or "get my employee id" in query_lower
-               )
-           if needs_employee_id and not self.context["employee_id"] and not lookup_by_name:
-               response = "May I know your Employee ID to retrieve this information?"
-               self.context["routing"] = routing
-               self.set_current_field("employee_id")
-               self.add_history("assistant", response)
-               return response
-           response = self.route_request(routing, request)
-           response = self.clean_response(response)
-           self.context["routing"] = None
-           self.set_current_field(None)
-           self.add_history("assistant", response)
-           return response
+            intent = routing.get("intent", "")
+            needs_employee_id = intent in ["employee", "leave", "policy"]
+            query_lower = request.lower()
+            lookup_by_name = (
+                "my name is" in query_lower
+                or "employee id by name" in query_lower
+                or "find my employee id" in query_lower
+                or "get my employee id" in query_lower
+            )
+            if needs_employee_id and not self.context["employee_id"] and not lookup_by_name:
+                response = "May I know your Employee ID to retrieve this information?"
+                self.context["routing"] = routing
+                self.set_current_field("employee_id")
+                self.add_history("assistant", response)
+                return response
+            response = self.route_request(routing, request)
+            response = self.clean_response(response)
+            self.context["routing"] = None
+            self.set_current_field(None)
+            self.add_history("assistant", response)
+            return response
 
         # Leave Application Workflow
         if not self.all_information_collected():

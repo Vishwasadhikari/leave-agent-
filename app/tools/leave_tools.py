@@ -152,5 +152,18 @@ def is_loss_of_pay(employee_id: str):
         "loss_of_pay": False
 
     }
-    
+@tool
+def get_leave_status(employee_id: str):
+    """
+    Retrieve the latest leave request status for an employee.
+    """
+
+    status = db.get_latest_leave_status(employee_id)
+
+    if status is None:
+        return {
+            "status": "employee_not_found"
+        }
+
+    return status
             

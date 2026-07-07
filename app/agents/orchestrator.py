@@ -1,5 +1,4 @@
 import re
-import sys
 import time
 import io
 from contextlib import redirect_stdout
@@ -180,22 +179,25 @@ If you have any leave-related questions, I'd be happy to help."""
             Return a natural conversational answer.
             """
             return prompt
-        
         elif agent_name == "leave":
-            prompt = f"""
-            User asked:
-            {user_request}
-            
-            Available Context:
-            Employee ID: {employee_id if employee_id else "Not Provided"}
-            
-            Answer ONLY the user's leave-related question.
-            If employee information is required but missing, ask ONLY for Employee ID.
-            If the user is asking for planning or recommendations, provide advice based on context.
-            
-            Return a natural conversational answer.
-            """
-            return prompt
+            return f"""
+        User asked:
+        {user_request}
+
+        Available Context:
+        Employee ID: {employee_id if employee_id else "Not Provided"}
+
+        Instructions:
+
+        - If the user asks about leave balance, use the leave balance tool.
+        - If the user asks whether leave is possible, use the leave availability tool.
+        - If the user asks about loss of pay, use the loss of pay tool.
+        - If the user asks about the status of a previously submitted leave request, use the leave status tool.
+        - If Employee ID is required but missing, ask ONLY for Employee ID.
+        - If the user is asking for planning or recommendations, provide advice based on context.
+
+        Return a natural conversational answer.
+        """
         
         elif agent_name == "holiday":
             return f"""
@@ -783,8 +785,21 @@ status: found
     def handle_employee_lookup(self, user_input):
         """Handle employee ID field when user provides a name instead of ID."""
         if user_input.upper().startswith("EMP"):
-            self.update_context("employee_id", user_input.upper())
-            return True
+            employee_prompt = self.build_agent_prompt(
+        "employee",
+        {"employee_id": user_input.upper()}
+        )
+            result = self.clean_response(
+        self._execute_agent_silent(self.employee_agent, employee_prompt)
+        )
+            parsed = self.parse_structured_response(result)
+            if parsed.get("status", "").lower() == "success":
+                self.update_context("employee_id", parsed.get("employee_id"))
+                self.update_context("employee_name", parsed.get("employee_name"))
+                self.update_context("manager_id", parsed.get("manager_id"))
+                self.update_context("manager_name", parsed.get("manager_name"))
+                return True
+            return False
 
         employee_id, employee_name, manager_id, manager_name = self.lookup_employee_by_name(user_input)
 
@@ -929,7 +944,6 @@ status: found
 
     def _format_confirmation_message(self, results):
         """Format a natural confirmation message before submission."""
-        employee_info = results.get("employee", {})
         holiday_info = results.get("holiday", {})
         leave_info = results.get("leave", {})
         policy_info = results.get("policy", {})
@@ -939,42 +953,47 @@ status: found
         policy_status = policy_info.get('policy_status', 'N/A')
 
         leave_type_display = self.context['leave_type'].capitalize() if self.context['leave_type'] else 'N/A'
-        employee_name_display = self.context['employee_name'] if self.context['employee_name'] else self.context['employee_id']
-
+        if self.context["employee_name"]:
+            employee_name_display = (
+        f"{self.context['employee_name']} "
+        f"({self.context['employee_id']})"
+        )
+        else:
+            employee_name_display = self.context["employee_id"]
         message = f"""Your leave request has been validated.
+ 
+                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                Employee
+                {employee_name_display}
 
-Employee
-{employee_name_display}
+                Leave Type
+                {leave_type_display}
 
-Leave Type
-{leave_type_display}
+                Dates
+                {self.context['start_date']} to {self.context['end_date']}
 
-Dates
-{self.context['start_date']} to {self.context['end_date']}
+                Reason
+                {self.context['reason'] if self.context['reason'] else 'N/A'}
 
-Reason
-{self.context['reason'] if self.context['reason'] else 'N/A'}
+                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                Processing Summary
 
-Processing Summary
+                Working Days
+                {working_days}
 
-Working Days
-{working_days}
+                Remaining Leave
+                {remaining_leave}
 
-Remaining Leave
-{remaining_leave}
+                Policy Status
+                {policy_status}
 
-Policy Status
-{policy_status}
+                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                Would you like me to submit this leave request?
 
-Would you like me to submit this leave request?
-
-Reply YES to submit, NO to cancel."""
+                Reply YES to submit, NO to cancel."""
         return message
 
     def handle_confirmation_response(self, user_response):
@@ -1038,11 +1057,8 @@ Please try again or contact your HR team for assistance."""
         FIX #3: Check for pending field response BEFORE intent detection
         """
         self.add_history("user", request)
-        print("\n===== CONTEXT =====")
-        print("current_field:", self.get_current_field())
-        print("awaiting_confirmation:", self.context["awaiting_confirmation"])
-        print("routing:", self.context["routing"])
-        print("===================\n")
+      
+
 
         # Handle greeting
         if self.is_greeting(request):
@@ -1068,6 +1084,17 @@ Please try again or contact your HR team for assistance."""
                     response = "Employee not found. Please provide a valid Employee ID or name."
                     self.add_history("assistant", response)
                     return response
+                self.set_current_field(None)
+                if not self.all_information_collected():
+                    field, question = self.get_next_missing_field()
+                    self.set_current_field(field)
+                    welcome = (
+                        f"Employee verified.\n\n"
+                        f"Welcome {self.context['employee_name']}!\n\n"
+                        f"{question}"
+                        )
+                    self.add_history("assistant", welcome)
+                    return welcome
             else:
                 self.update_context(current_field, request)
 
@@ -1092,9 +1119,7 @@ Please try again or contact your HR team for assistance."""
         # Detect intent
         if not self.context["routing"]:
             routing = detect_intent(request)
-            print("\n===== ROUTING =====")
-            print(routing)
-            print("===================\n")
+         
             self.context["routing"] = routing
         else:
             routing = self.context["routing"]

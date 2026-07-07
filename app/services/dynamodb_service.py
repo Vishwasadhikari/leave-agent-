@@ -257,5 +257,27 @@ def update_leave_usage(
         }
 
     )        
-
+    
+def get_latest_leave_status(self, employee_id):
+        response = self.leave_request_table.scan(
+        FilterExpression="employee_id = :employee_id",
+        ExpressionAttributeValues={
+            ":employee_id": employee_id
+        }
+    )
+        leave_requests = response.get("Items", [])
+        if not leave_requests:
+            return None
+        latest_request = max(
+            leave_requests,
+            key=lambda x: x["start_date"]
+        )
+        return {
+        "request_id": latest_request.get("request_id"),
+        "status": latest_request.get("status"),
+        "leave_type": latest_request.get("leave_type"),
+        "start_date": latest_request.get("start_date"),
+        "end_date": latest_request.get("end_date"),
+         "leave_status": latest_request.get("status")
+    }
 db = DynamoDBService() 

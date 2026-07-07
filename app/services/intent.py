@@ -97,6 +97,48 @@ INTENT: leave
 AGENTS: leave
 WORKFLOW: no
 
+----------------------------
+
+User:
+What is the status of my leave?
+
+Return:
+INTENT: leave
+AGENTS: leave
+WORKFLOW: no
+
+----------------------------
+
+User:
+Has my leave been approved?
+
+Return:
+INTENT: leave
+AGENTS: leave
+WORKFLOW: no
+
+----------------------------
+
+User:
+Check my leave request status.
+
+Return:
+INTENT: leave
+AGENTS: leave
+WORKFLOW: no
+
+----------------------------
+
+User:
+Is my leave still pending?
+
+Return:
+INTENT: leave
+AGENTS: leave
+WORKFLOW: no
+
+----------------------------
+
 User: Can I take 7 sick leaves?
 Return:
 INTENT: leave

@@ -819,10 +819,14 @@ status: found
 
         # FIX #4: Check for duplicate submission
         if self.has_pending_submission_for_date(
-            request["employee_id"],
-            request["start_date"],
-            request["end_date"]
-        ):
+    request["employee_id"],
+    request["start_date"],
+    request["end_date"]
+):
+    # Clear workflow state before returning
+            self.context["routing"] = None
+            self.set_current_field(None)
+
             return (
                 f"You already have a pending leave request for "
                 f"{request['start_date']}. Please wait for approval or contact your manager."
@@ -857,8 +861,9 @@ status: found
         leave_raw = self.clean_response(
             self._execute_agent_silent(self.leave_agent, leave_prompt)
         )
+    
         leave_result = self.parse_structured_response(leave_raw)
-
+        
         if "status" not in leave_result:
             leave_result["status"] = "success"
 
@@ -880,23 +885,31 @@ status: found
         policy_raw = self.clean_response(
             self._execute_agent_silent(self.policy_agent, policy_prompt)
             )
-        print("\n===== RAW POLICY RESPONSE =====")
-        print(policy_raw)
-        print("===============================\n")
+        
         policy_result = self.parse_structured_response(policy_raw)
-        print("\n===== PARSED POLICY RESPONSE =====")
-        print(policy_result)
-        print("==================================\n")
-        with redirect_stdout(io.StringIO()):
-            policy_result = self.policy_agent(policy_prompt)
-            policy_result = self.clean_response(policy_result)
-            policy_parsed = self.parse_structured_response(policy_result)
-            results["policy"] = policy_parsed
+        
+        # with redirect_stdout(io.StringIO()):
+        #     policy_result = self.policy_agent(policy_prompt)
+        #     policy_result = self.clean_response(policy_result)
+        #     policy_parsed = self.parse_structured_response(policy_result)
+        #     results["policy"] = policy_parsed
+        policy_parsed = policy_result
+        results["policy"] = policy_parsed
         
         # VALIDATE POLICY RESPONSE
         is_policy_complete, policy_missing = self.is_response_complete("policy", policy_parsed)
         if not is_policy_complete:
             return f"We encountered an issue validating your request against company policy. Please try again. (Missing: {', '.join(policy_missing)})"
+        
+        # Stop workflow if policy rejected the leave
+        approved = policy_parsed.get("approved", "").lower()
+        if approved != "true":
+            self.context["pending_submission"] = None
+            self.context["awaiting_confirmation"] = False
+            return (
+                f"Your leave request cannot be submitted.\n\n"
+                f"Reason: {policy_parsed.get('message', 'Policy validation failed.')}"
+            )
 
         # Step 5: Store pending submission and await confirmation
         self.context["pending_submission"] = request
@@ -1025,6 +1038,11 @@ Please try again or contact your HR team for assistance."""
         FIX #3: Check for pending field response BEFORE intent detection
         """
         self.add_history("user", request)
+        print("\n===== CONTEXT =====")
+        print("current_field:", self.get_current_field())
+        print("awaiting_confirmation:", self.context["awaiting_confirmation"])
+        print("routing:", self.context["routing"])
+        print("===================\n")
 
         # Handle greeting
         if self.is_greeting(request):
@@ -1074,6 +1092,9 @@ Please try again or contact your HR team for assistance."""
         # Detect intent
         if not self.context["routing"]:
             routing = detect_intent(request)
+            print("\n===== ROUTING =====")
+            print(routing)
+            print("===================\n")
             self.context["routing"] = routing
         else:
             routing = self.context["routing"]

@@ -87,7 +87,7 @@ class DynamoDBService:
 
         response = self.holiday_table.get_item(
             Key={
-                "date": date
+                "holiday_date": date
             }
         )
 

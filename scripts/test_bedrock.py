@@ -7,7 +7,7 @@ client = boto3.client(
 )
 
 response = client.converse(
-    modelId="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+    modelId="amazon.nova-lite-v1:0",  # Change if you're using another model
     messages=[
         {
             "role": "user",

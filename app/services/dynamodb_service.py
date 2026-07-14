@@ -39,10 +39,32 @@ class DynamoDBService:
 
         return response.get("Item")
     def get_employee_by_name(self, employee_name):
+        """
+        Find an employee by full name or partial name.
+        Matching is case-insensitive.
+        """
+        search_name = employee_name.strip().lower()
+
+        # Remove common phrases users type
+        for phrase in [
+            "my name is",
+            "i am",
+            "i'm",
+            "employee",
+            "employee name is"
+        ]:
+            search_name = search_name.replace(phrase, "").strip()
+            if not search_name:
+                return None
+            
         response = self.employee_table.scan()
-        print(response["Items"])
+        
         for employee in response["Items"]:
-            if employee["name"].strip().lower() == employee_name.strip().lower():
+            if employee["name"].strip().lower() == search_name:
+                return employee
+                
+        for employee in response["Items"]:
+            if search_name in employee["name"].strip().lower():
                 return employee
         return None
         

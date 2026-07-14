@@ -7,8 +7,10 @@ from datetime import datetime, timedelta
 
 from httpx import request
 
+
 from app.services.intent import detect_intent
 from strands import Agent
+from app.utils.validators import InputValidator
 
 from app.utils.model import nova_model
 
@@ -44,6 +46,7 @@ class LeaveOrchestrator:
         self.history = []
         self.context = {
             "routing": None,
+            "pending_general_request": None,
             "current_field": None,
             "employee_id": None,
             "employee_name": None,
@@ -235,6 +238,57 @@ If you have any leave-related questions, I'd be happy to help."""
     def update_context(self, key, value):
         if key in self.context:
             self.context[key] = value
+    
+    def validate_field(self, field, value):
+        """
+        Validate user input before storing it in context.
+        Returns:
+            (True, cleaned_value)   -> valid input
+            (False, error_message)  -> invalid input
+        """
+        value = value.strip()
+
+        # -------------------------------
+        # Leave Type
+        # -------------------------------
+        if field == "leave_type":
+
+            valid_types = {
+                "annual": "annual",
+                "casual": "casual",
+                "sick": "sick",
+                "medical": "sick",
+                "medical leave": "sick"
+            }
+            
+            cleaned = value.lower()
+
+            if cleaned in valid_types:
+                return True, valid_types[cleaned]
+            
+            return (
+                False,
+                "❌ Invalid leave type.\n\n"
+                "Please choose one of:\n"
+                "• Annual\n"
+                "• Casual\n"
+                "• Sick"
+            )
+
+        # -------------------------------
+        # Reason
+        # -------------------------------
+        if field == "reason":
+
+            if len(value) < 3:
+                return (
+                    False,
+                    "❌ Please provide a valid reason for your leave."
+                )
+            return True, value
+
+        # Default
+        return True, value
 
     def get_context(self, key):
         return self.context.get(key)
@@ -247,6 +301,7 @@ If you have any leave-related questions, I'd be happy to help."""
         """
         # Store submission in recent history for duplicate checking
         if self.context.get("pending_submission"):
+            
             submission = {
                 "employee_id": self.context["employee_id"],
                 "start_date": self.context["start_date"],
@@ -261,6 +316,7 @@ If you have any leave-related questions, I'd be happy to help."""
         # Reset workflow-specific fields
         self.context.update({
             "routing": None,
+            "pending_general_request": None,
             "current_field": None,
             "leave_type": None,
             "start_date": None,
@@ -784,11 +840,13 @@ status: found
 
     def handle_employee_lookup(self, user_input):
         """Handle employee ID field when user provides a name instead of ID."""
-        if user_input.upper().startswith("EMP"):
+        match = re.search(r"EMP\s*0*(\d+)", user_input.upper())
+        if match:
+            employee_id = f"EMP{int(match.group(1)):03d}"
             employee_prompt = self.build_agent_prompt(
         "employee",
-        {"employee_id": user_input.upper()}
-        )
+        {"employee_id": employee_id}
+    )
             result = self.clean_response(
         self._execute_agent_silent(self.employee_agent, employee_prompt)
         )
@@ -834,12 +892,14 @@ status: found
 
         # FIX #4: Check for duplicate submission
         if self.has_pending_submission_for_date(
-    request["employee_id"],
-    request["start_date"],
-    request["end_date"]
+            request["employee_id"],
+            request["start_date"],
+            request["end_date"]
 ):
     # Clear workflow state before returning
             self.context["routing"] = None
+            self.context["awaiting_confirmation"] = False
+            self.context["pending_submission"] = None
             self.set_current_field(None)
 
             return (
@@ -1060,7 +1120,30 @@ Please try again or contact your HR team for assistance."""
         FIX #3: Check for pending field response BEFORE intent detection
         """
         self.add_history("user", request)
-      
+        if request.lower() in ["cancel", "exit"]:
+            if (
+            self.get_current_field()
+            or self.context["awaiting_confirmation"]
+            or self.context["routing"]
+        ):
+                self.reset_context()
+
+            response = (
+                "✅ Your current leave application has been cancelled.\n\n"
+                "How else can I help you today?"
+            )
+
+            self.add_history("assistant", response)
+
+            return response
+        if self.is_greeting(request):
+            response = self.handle_greeting()
+            self.add_history("assistant", response)
+            return response
+        if self.context["awaiting_confirmation"]:
+            response = self.handle_confirmation_response(request)
+            self.add_history("assistant", response)
+            return response
 
 
         # Handle greeting
@@ -1084,10 +1167,31 @@ Please try again or contact your HR team for assistance."""
             if current_field == "employee_id":
                 success = self.handle_employee_lookup(request)
                 if not success:
-                    response = "Employee not found. Please provide a valid Employee ID or name."
-                    self.add_history("assistant", response)
-                    return response
+                   response = ("I couldn't find that employee.\n\n"
+                               "Please enter a valid Employee ID (e.g. EMP003)\n"
+                               "or tell me your full name."
+                            )
+                   self.add_history("assistant", response)
+                   return response
                 self.set_current_field(None)
+                
+                if self.context.get("pending_general_request"):
+                    original_request = self.context["pending_general_request"]
+
+                    response = self.route_request(
+                        self.context["routing"],
+                        original_request
+                    )
+
+                    response = self.clean_response(response)
+
+                    self.context["pending_general_request"] = None
+                    self.context["routing"] = None
+
+                    self.add_history("assistant", response)
+
+                    return response
+    
                 if not self.all_information_collected():
                     field, question = self.get_next_missing_field()
                     self.set_current_field(field)
@@ -1099,9 +1203,16 @@ Please try again or contact your HR team for assistance."""
                     self.add_history("assistant", welcome)
                     return welcome
             else:
-                self.update_context(current_field, request)
-
-            self.set_current_field(None)
+                validation = InputValidator.validate(
+                current_field,
+                request,
+                self.context
+            )
+                if not validation["valid"]:
+                    self.add_history("assistant", validation["message"])
+                    return validation["message"]
+                self.update_context(current_field, validation["value"])
+                self.set_current_field(None)
             
             # Check if we can continue with workflow
             if not self.all_information_collected():
@@ -1148,7 +1259,9 @@ Please try again or contact your HR team for assistance."""
             if needs_employee_id and not self.context["employee_id"] and not lookup_by_name:
                 response = "May I know your Employee ID to retrieve this information?"
                 self.context["routing"] = routing
+                self.context["pending_general_request"] = request
                 self.set_current_field("employee_id")
+                response = "May I know your Employee ID to retrieve this information?"
                 self.add_history("assistant", response)
                 return response
             response = self.route_request(routing, request)
